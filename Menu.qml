@@ -660,6 +660,7 @@ Item {
               spacing: 7
 
               Text {
+  textFormat: Text.PlainText
                 text: "/"
                 color: Color.muted
                 font.family: Style.font.menuFamily
@@ -728,6 +729,7 @@ Item {
                 }
 
                 Text {
+  textFormat: Text.PlainText
                   anchors.verticalCenter: parent.verticalCenter
                   visible: !parent.text
                   text: "Type to search apps..."
@@ -737,6 +739,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 Layout.preferredWidth: 24
                 Layout.fillHeight: true
                 text: "×"
@@ -838,6 +841,7 @@ Item {
                   border.width: 1
 
                   Text {
+  textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: row && row.label.length > 0 ? row.label.charAt(0).toUpperCase() : "?"
                     color: Color.menu.text
@@ -848,6 +852,7 @@ Item {
                 }
 
                 Text {
+  textFormat: Text.PlainText
                   anchors.fill: parent
                   visible: !searchItem.isApp
                   text: row ? (row.icon || "□") : "□"
@@ -861,6 +866,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 anchors.top: searchIconBox.bottom
                 anchors.topMargin: 8
                 anchors.left: parent.left
@@ -879,6 +885,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 anchors.top: searchIconBox.bottom
                 anchors.topMargin: 29
                 anchors.left: parent.left
@@ -1040,6 +1047,7 @@ Item {
                   border.width: 1
 
                   Text {
+  textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: {
                       var name = root.appLibrary
@@ -1071,6 +1079,7 @@ Item {
                 z: 3
 
                 Text {
+  textFormat: Text.PlainText
                   anchors.centerIn: parent
                   text: "󰐃"
                   color: mouse.containsMouse
@@ -1091,6 +1100,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 id: appLabel
                 anchors.top: iconBox.bottom
                 anchors.topMargin: 8
@@ -1112,6 +1122,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 id: appDescription
                 anchors.top: appLabel.bottom
                 anchors.topMargin: 2
@@ -1261,6 +1272,7 @@ Item {
               }
 
               Text {
+  textFormat: Text.PlainText
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
                 anchors.topMargin: 14
@@ -1284,6 +1296,7 @@ Item {
                 spacing: 6
 
                 Text {
+  textFormat: Text.PlainText
                   width: Math.min(140, implicitWidth)
                   height: sectionLabelRow.height
                   text: row ? row.label : ""
@@ -1299,6 +1312,7 @@ Item {
                 }
 
                 Text {
+  textFormat: Text.PlainText
                   visible: row && row.hasChildren
                   width: visible ? 12 : 0
                   height: sectionLabelRow.height
@@ -1376,6 +1390,7 @@ Item {
                 spacing: 2
 
                 Text {
+  textFormat: Text.PlainText
                   width: 100
                   text: item.icon || "□"
                   color: Color.muted
@@ -1386,6 +1401,7 @@ Item {
                 }
 
                 Text {
+  textFormat: Text.PlainText
                   width: 100
                   text: item.label
                   color: Color.muted

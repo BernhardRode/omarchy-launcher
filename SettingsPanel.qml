@@ -136,6 +136,7 @@ Item {
       spacing: Style.space(8)
 
       Text {
+  textFormat: Text.PlainText
         text: "Icon layout settings"
         color: Color.popups.text
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -144,6 +145,7 @@ Item {
       }
 
       Text {
+  textFormat: Text.PlainText
         text: "0 means automatic sizing"
         color: Util.alpha(Color.popups.text, 0.62)
         font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -155,6 +157,7 @@ Item {
         spacing: Style.space(16)
 
         Text {
+  textFormat: Text.PlainText
           Layout.fillWidth: true
           text: "Columns"
           color: Color.popups.text
@@ -180,6 +183,7 @@ Item {
         spacing: Style.space(16)
 
         Text {
+  textFormat: Text.PlainText
           Layout.fillWidth: true
           text: "Rows"
           color: Color.popups.text
@@ -205,6 +209,7 @@ Item {
         spacing: Style.space(16)
 
         Text {
+  textFormat: Text.PlainText
           Layout.fillWidth: true
           text: "Icon size"
           color: Color.popups.text
@@ -231,6 +236,7 @@ Item {
         spacing: Style.space(16)
 
         Text {
+  textFormat: Text.PlainText
           Layout.fillWidth: true
           text: "Interface font size"
           color: Color.popups.text
