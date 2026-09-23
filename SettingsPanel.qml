@@ -26,6 +26,19 @@ Item {
 
   readonly property string stateFile: Quickshell.env("HOME")
     + "/.local/state/iamcheyan-launcher/layout.json"
+  readonly property string lockFile: Quickshell.env("HOME")
+    + "/.local/state/iamcheyan-launcher/lock-enabled"
+  property bool lockEnabled: false
+
+  // Switching the lock on is unrestricted because it only ever restricts.
+  // Switching it off happens in the launcher, behind the code.
+  function enableLock() {
+    root.lockEnabled = true
+    Util.execDetached("mkdir -p "
+      + Util.shellQuote(Quickshell.env("HOME") + "/.local/state/iamcheyan-launcher")
+      + " && printf %s " + Util.shellQuote("1\n")
+      + " > " + Util.shellQuote(root.lockFile))
+  }
 
   function bounded(value, fallback, minimum, maximum) {
     var number = parseInt(value, 10)
@@ -99,6 +112,16 @@ Item {
   }
 
   onSettingsChanged: root.readSettings()
+
+  FileView {
+    id: lockFileView
+    path: root.lockFile
+    printErrors: false
+    watchChanges: true
+    onLoaded: root.lockEnabled = String(text() || "").trim() === "1"
+    onLoadFailed: root.lockEnabled = false
+    onFileChanged: reload()
+  }
 
   FileView {
     id: stateFileView
@@ -255,6 +278,35 @@ Item {
           fontSize: root.fontSize
           onModified: function(value) { root.commit("fontSize", value) }
         }
+      }
+
+      Text {
+  textFormat: Text.PlainText
+        text: "Application lock"
+        color: Color.popups.text
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: root.fontSize + 4
+        font.bold: true
+      }
+
+      Text {
+  textFormat: Text.PlainText
+        width: parent.width
+        wrapMode: Text.WordWrap
+        text: root.lockEnabled
+          ? "On. To switch it off, open the launcher, click the key in the top right, enter the code and choose Disable lock."
+          : "Off. When on, the launcher shows only the applications and menu entries you allow. The default code is 0000."
+        color: Util.alpha(Color.popups.text, 0.62)
+        font.family: root.bar ? root.bar.fontFamily : Style.font.family
+        font.pixelSize: Math.max(10, root.fontSize - 2)
+      }
+
+      Button {
+        visible: !root.lockEnabled
+        text: "Enable application lock"
+        fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+        fontSize: root.fontSize
+        onClicked: root.enableLock()
       }
 
       Button {
