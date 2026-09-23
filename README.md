@@ -69,6 +69,38 @@ Settings are stored at:
 ~/.local/state/iamcheyan-launcher/layout.json
 ```
 
+## Application lock
+
+An optional parental-control mode. It is **off by default**: with the lock off the
+launcher behaves exactly as before and no key icon is shown.
+
+- **Switch it on** with right-click on the top-bar widget → **Enable application
+  lock**. This is unrestricted, because it only ever restricts.
+- **Switch it off** in the launcher only: click the key in the top right, enter the
+  code, then **Disable lock**. So the lock cannot be lifted without the code.
+
+With the lock on, the launcher shows only what has been allowed — both applications
+and native menu entries. The default code is `0000` and can be changed in the
+editing view (4 to 8 digits).
+
+Click the key and enter the code to open the editing view:
+
+- Every application and menu entry is listed, allowed ones marked with a check,
+  blocked ones veiled and struck through. A click toggles an entry.
+- Each category is listed **flat**, including deeply nested entries, with the
+  entry's path underneath, so nothing has to be clicked through.
+- A submenu must itself be allowed for its entries to be reachable.
+- **No action is ever executed while editing** — not from a tile and not from a
+  search result — so nothing can be installed, removed or powered off by accident.
+- A category without a single allowed entry disappears from the bottom
+  navigation. Applications always stays, so there is a way back.
+
+Click the key again to leave the editing view and apply the selection.
+
+The code guards against accidental changes; it is not a security feature. It is
+stored in plain text next to the allow lists, and the lock only covers this
+launcher — applications can still be started from a terminal or a keybinding.
+
 ## Search and keyboard navigation
 
 Search covers installed applications and Omarchy menu actions. The first match is selected automatically, the selected result is highlighted, and the bottom category follows it.
@@ -107,6 +139,31 @@ The plugin does not create a second application index or menu-action format.
 - `SettingsPanel.qml` — native layout and typography settings.
 - `MenuModel.js` — menu parsing, merging, flattening, and category helpers.
 - `RunningApps.qml` — running-application integration.
+
+State written under `~/.local/state/iamcheyan-launcher/`:
+
+- `pinned-apps` — pinned applications.
+- `layout.json` — columns, rows, icon size, and interface font size.
+
+The application lock keeps everything in one file,
+`~/.config/omarchy/iamcheyan-launcher.json`, because the allow lists are a
+deliberate decision rather than incidental state. It is written pretty printed
+with sorted lists and can be edited by hand; the launcher picks changes up
+immediately. Missing file means the lock is off.
+
+```json
+{
+  "version": 1,
+  "lockEnabled": true,
+  "passcode": "0000",
+  "allowedApps": ["chromium", "org.gnome.Nautilus"],
+  "allowedMenuEntries": ["learn.keybindings", "style.theme"]
+}
+```
+
+`allowedApps` holds desktop entry ids, `allowedMenuEntries` holds native menu
+entry ids such as `style.theme`. A malformed file is reported and ignored rather
+than silently unlocking the launcher.
 
 ## Validation
 

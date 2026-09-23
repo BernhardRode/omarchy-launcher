@@ -51,6 +51,25 @@ Item {
   property var runningSet: ({})
   property bool pinnedIdsLoaded: false
   readonly property string stateFile: Quickshell.env("HOME") + "/.local/state/iamcheyan-launcher/pinned-apps"
+
+  // Optional application lock. It is off unless lock-enabled says otherwise, so
+  // an existing installation keeps behaving exactly as before.
+  readonly property string defaultPasscode: "0000"
+  // One config file for the whole feature, under XDG config rather than state,
+  // because the allow lists are a deliberate user decision and are meant to be
+  // edited by hand as well as through the UI.
+  readonly property string lockConfigDir: Quickshell.env("HOME") + "/.config/omarchy"
+  readonly property string lockConfigFile: root.lockConfigDir + "/iamcheyan-launcher.json"
+  property bool lockEnabled: false
+  property var allowedIds: ({})
+  property bool allowedIdsLoaded: false
+  property var allowedActionIds: ({})
+  property string passcode: root.defaultPasscode
+  // "normal" shows only allowed entries, "unlock" asks for the code and
+  // "settings" shows everything with a toggle on each tile.
+  property string lockMode: "normal"
+  readonly property bool settingsMode: root.lockEnabled && root.lockMode === "settings"
+  property string codeNotice: ""
   property int layoutColumns: 8
   property int layoutRows: 4
   property int layoutIconSize: 48
@@ -77,8 +96,11 @@ Item {
     root.escapeNeedsSecondPress = false
     var payload = {}
     try { payload = JSON.parse(payloadJson || "{}") } catch (error) {}
+    root.lockMode = "normal"
+    root.codeNotice = ""
     root.selectSection(String(payload.menu || "apps"), false)
     pinnedFile.reload()
+    lockConfigFile_view.reload()
     runningAppsLoader.active = true
     if (runningAppsLoader.item) runningAppsLoader.item.refresh()
     root.refreshApps()
@@ -97,6 +119,207 @@ Item {
     root.refreshApps()
     root.selectSection(root.activeSection, false)
     return "ok"
+  }
+
+  // "__back__" is navigation rather than an action and stays reachable.
+  function actionAllowed(id) {
+    var key = String(id || "")
+    return key === "__back__" || root.allowedActionIds[key] === true
+  }
+
+  function allowedSectionRows(rows) {
+    if (!root.lockEnabled || root.settingsMode) return rows
+    return (rows || []).filter(function(row) { return root.actionAllowed(row.id) })
+  }
+
+  // Every entry below a category, however deeply nested. Parents stay in the
+  // list because a child is only reachable while its parent is allowed.
+  function descendantSectionRows(id, items) {
+    var prefix = String(id || "") + "."
+    var rows = []
+    for (var key in items) {
+      if (key.indexOf(prefix) !== 0) continue
+      var item = items[key] || ({})
+      rows.push({
+        id: key,
+        label: String(item.label || key),
+        icon: String(item.icon || ""),
+        description: String(item.description || ""),
+        action: String(item.action || ""),
+        hasChildren: MenuModel.isParent(key, items),
+        path: MenuModel.pathLabel(key, items)
+      })
+    }
+    rows.sort(function(a, b) {
+      var ap = String(a.path || "").toLowerCase()
+      var bp = String(b.path || "").toLowerCase()
+      if (ap !== bp) return ap < bp ? -1 : 1
+      var al = String(a.label || "").toLowerCase()
+      var bl = String(b.label || "").toLowerCase()
+      return al < bl ? -1 : (al > bl ? 1 : 0)
+    })
+    return rows
+  }
+
+  // A category without a single allowed entry disappears from the navigation,
+  // so nobody is offered an empty page.
+  function sectionHasAllowed(id) {
+    if (!root.lockEnabled || root.settingsMode) return true
+    var key = String(id || "")
+    if (key === "apps") return true
+    var items = MenuModel.merge(root.nativeDefaults, root.nativeOverrides)
+    for (var child in items) {
+      if (MenuModel.parentId(child) !== key) continue
+      if (root.allowedActionIds[child] === true) return true
+    }
+    return false
+  }
+
+  readonly property var visibleNavigationIds: {
+    var result = []
+    for (var i = 0; i < root.navigationIds.length; i++) {
+      var id = root.navigationIds[i]
+      if (root.sectionHasAllowed(id)) result.push(id)
+    }
+    return result
+  }
+
+  function sortedIdsOf(map) {
+    var ids = []
+    for (var id in map) if (map[id]) ids.push(id)
+    ids.sort()
+    return ids
+  }
+
+  function idMapOf(list) {
+    var next = ({})
+    if (!Array.isArray(list)) return next
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] || "").trim()
+      if (id) next[id] = true
+    }
+    return next
+  }
+
+  // Pretty printed with sorted lists, because this file is meant to be opened
+  // in an editor and diffed, not just written by the UI.
+  function saveLockConfig() {
+    var payload = JSON.stringify({
+      version: 1,
+      lockEnabled: root.lockEnabled,
+      passcode: root.passcode,
+      allowedApps: root.sortedIdsOf(root.allowedIds),
+      allowedMenuEntries: root.sortedIdsOf(root.allowedActionIds)
+    }, null, 2) + "\n"
+    Util.execDetached("mkdir -p " + Util.shellQuote(root.lockConfigDir)
+      + " && printf %s " + Util.shellQuote(payload)
+      + " > " + Util.shellQuote(root.lockConfigFile))
+  }
+
+  // A malformed file must not silently unlock the launcher, so the previous
+  // values are kept and the problem is reported instead.
+  function applyLockConfig(raw) {
+    var parsed = null
+    try { parsed = JSON.parse(raw) } catch (error) {
+      console.warn("iamcheyan.launcher: cannot parse " + root.lockConfigFile + ":", error)
+      return false
+    }
+    if (!parsed || typeof parsed !== "object") return false
+    root.lockEnabled = parsed.lockEnabled === true
+    var code = root.normalizedCode(parsed.passcode)
+    root.passcode = code.length >= 4 ? code : root.defaultPasscode
+    root.allowedIds = root.idMapOf(parsed.allowedApps)
+    root.allowedActionIds = root.idMapOf(parsed.allowedMenuEntries)
+    return true
+  }
+
+  function toggleAllowed(id) {
+    var next = Object.assign({}, root.allowedIds)
+    if (next[id]) delete next[id]
+    else next[id] = true
+    root.allowedIds = next
+    root.saveLockConfig()
+  }
+
+  function toggleAllowedAction(id) {
+    var key = String(id || "")
+    if (!key || key === "__back__") return
+    var next = Object.assign({}, root.allowedActionIds)
+    if (next[key]) delete next[key]
+    else next[key] = true
+    root.allowedActionIds = next
+    root.saveLockConfig()
+  }
+
+  function normalizedCode(value) {
+    return String(value || "").replace(/[^0-9]/g, "").slice(0, 8)
+  }
+
+  function savePasscode(value) {
+    var code = root.normalizedCode(value)
+    if (code.length < 4) {
+      root.codeNotice = "The code needs at least 4 digits."
+      return false
+    }
+    root.passcode = code
+    root.saveLockConfig()
+    root.codeNotice = "New code saved."
+    return true
+  }
+
+  // Turning the lock on is unrestricted because it only ever restricts. Turning
+  // it off happens behind the code, otherwise the lock would be worthless.
+  function setLockEnabled(on) {
+    root.lockEnabled = on === true
+    root.saveLockConfig()
+    if (!root.lockEnabled) {
+      root.lockMode = "normal"
+      root.codeNotice = ""
+    }
+    root.selectSection("apps", false)
+    root.filterCurrentSection()
+  }
+
+  function keyPressed() {
+    if (!root.lockEnabled) return
+    if (root.settingsMode) {
+      root.lockMode = "normal"
+      root.codeNotice = ""
+      searchField.clear()
+      // The category just edited may now be empty and hidden; applications
+      // is always a valid place to land.
+      root.selectSection("apps", false)
+      root.filterCurrentSection()
+      Qt.callLater(function() { searchField.forceActiveFocus() })
+      return
+    }
+    root.lockMode = "unlock"
+    root.codeNotice = ""
+    codeField.text = ""
+    Qt.callLater(function() { codeField.forceActiveFocus() })
+  }
+
+  function submitPasscode() {
+    if (root.normalizedCode(codeField.text) !== root.normalizedCode(root.passcode)) {
+      root.codeNotice = "Wrong code."
+      codeField.text = ""
+      return
+    }
+    root.lockMode = "settings"
+    root.codeNotice = ""
+    codeField.text = ""
+    newCodeField.text = ""
+    searchField.clear()
+    root.refreshApps()
+    root.filterCurrentSection()
+    Qt.callLater(function() { searchField.forceActiveFocus() })
+  }
+
+  function cancelPasscode() {
+    root.lockMode = "normal"
+    root.codeNotice = ""
+    codeField.text = ""
+    Qt.callLater(function() { searchField.forceActiveFocus() })
   }
 
   function navigationItems() {
@@ -160,6 +383,16 @@ Item {
 
     root.activeSection = id
     root.activeSectionLabel = String(current.label || id)
+
+    // While editing, a category lists everything it contains at once, including
+    // deeply nested entries, so nothing has to be clicked through.
+    if (root.settingsMode) {
+      root.allSectionRows = root.descendantSectionRows(id, items)
+      root.filterCurrentSection()
+      if (focusSearch) Qt.callLater(function() { sectionGrid.forceActiveFocus() })
+      return
+    }
+
     var rows = []
     for (var key in items) {
       if (MenuModel.parentId(key) !== id) continue
@@ -192,6 +425,12 @@ Item {
     if (!row) return
     if (row.id === "__back__") {
       root.selectSection(MenuModel.parentId(root.activeSection), true)
+      return
+    }
+    // While editing, a click only ever toggles: no action is executed, so
+    // nothing can be installed, removed or powered off by accident.
+    if (root.settingsMode) {
+      root.toggleAllowedAction(row.id)
       return
     }
     if (row.hasChildren) root.selectSection(row.id, true)
@@ -279,6 +518,8 @@ Item {
         entry.genericName,
         entry.comment
       ].join(" ").toLowerCase()
+      if (root.lockEnabled && !root.settingsMode
+        && root.allowedIds[entry.id] !== true) continue
       if (!query || text.indexOf(query) >= 0) next.push(entry)
     }
     next.sort(function(a, b) {
@@ -312,11 +553,11 @@ Item {
         root.selectSection(root.activeSection, false)
         root.rebuildingSection = false
       } else {
-        root.sectionRows = root.allSectionRows
+        root.sectionRows = root.allowedSectionRows(root.allSectionRows)
       }
       return
     }
-    root.sectionRows = root.allSectionRows.filter(function(row) {
+    root.sectionRows = root.allowedSectionRows(root.allSectionRows).filter(function(row) {
       return (row.label + " " + row.description).toLowerCase().indexOf(query) >= 0
     })
   }
@@ -328,6 +569,8 @@ Item {
 
     for (var i = 0; i < root.allApps.length; i++) {
       var app = root.allApps[i]
+      if (root.lockEnabled && !root.settingsMode
+        && root.allowedIds[app.id] !== true) continue
       var appLabel = String(root.appLibrary ? root.appLibrary.entryName(app) : app.name || app.id)
       var appText = [appLabel, app.genericName, app.comment, app.id].join(" ").toLowerCase()
       if (appText.indexOf(normalized) < 0) continue
@@ -343,6 +586,8 @@ Item {
 
     for (var j = 0; j < menuRows.length; j++) {
       var menuRow = menuRows[j]
+      if (root.lockEnabled && !root.settingsMode
+        && !root.actionAllowed(menuRow.id)) continue
       var menuText = [menuRow.label, menuRow.description, menuRow.path, menuRow.id].join(" ").toLowerCase()
       if (menuText.indexOf(normalized) < 0) continue
       rows.push({
@@ -446,8 +691,9 @@ Item {
 
   function activateGlobalSearchRow(row) {
     if (!row) return
-    if (row.kind === "app") root.launch(row.entry)
-    else if (row.action) {
+    if (row.kind === "app") { root.launch(row.entry); return }
+    if (root.settingsMode) { root.toggleAllowedAction(row.id); return }
+    if (row.action) {
       Util.execDetached(row.action)
       root.close()
     }
@@ -502,6 +748,7 @@ Item {
 
   function launch(entry) {
     if (!entry || !root.appLibrary) return
+    if (root.settingsMode) { root.toggleAllowed(entry.id); return }
     root.close()
     root.appLibrary.launch(entry.id, root.appLibrary.entryName(entry))
   }
@@ -593,6 +840,31 @@ Item {
       root.pinnedIdsLoaded = true
       root.filterApps()
     }
+  }
+
+  FileView {
+    id: lockConfigFile_view
+    path: root.lockConfigFile
+    printErrors: false
+    watchChanges: true
+    onLoaded: {
+      root.applyLockConfig(text())
+      root.allowedIdsLoaded = true
+      root.filterApps()
+      root.filterCurrentSection()
+    }
+    // Without the file the lock stays off, so nothing changes for an
+    // installation that never opts in.
+    onLoadFailed: {
+      root.lockEnabled = false
+      root.passcode = root.defaultPasscode
+      root.allowedIds = ({})
+      root.allowedActionIds = ({})
+      root.allowedIdsLoaded = true
+      root.filterApps()
+      root.filterCurrentSection()
+    }
+    onFileChanged: reload()
   }
 
   Loader {
@@ -760,6 +1032,166 @@ Item {
             }
           }
 
+          // The key switches between normal use and the editing view.
+          Rectangle {
+            id: keyButton
+            visible: root.lockEnabled
+            anchors.top: parent.top
+            anchors.topMargin: 26
+            anchors.right: parent.right
+            anchors.rightMargin: 18
+            width: 32
+            height: 32
+            radius: 16
+            color: root.settingsMode
+              ? Color.accent
+              : (keyMouse.containsMouse ? Color.menu.selectedBackground : "transparent")
+            border.color: root.settingsMode ? Color.accent : Color.menu.border
+            border.width: 1
+
+            Text {
+              textFormat: Text.PlainText
+              anchors.centerIn: parent
+              text: "󰌆"
+              color: root.settingsMode ? Color.menu.background : Color.menu.text
+              font.family: Style.font.menuFamily
+              font.pixelSize: root.layoutFontSize + 3
+              font.weight: Font.DemiBold
+            }
+
+            MouseArea {
+              id: keyMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.keyPressed()
+            }
+
+            PanelToolTip {
+              visible: keyMouse.containsMouse
+              text: root.settingsMode
+                ? "Close settings and apply"
+                : "Open settings with a code"
+              panelForeground: "#eeeeee"
+              fontFamily: Style.font.menuFamily
+            }
+          }
+        }
+
+        Item {
+          visible: root.settingsMode
+          Layout.fillWidth: true
+          Layout.preferredHeight: root.settingsMode ? 44 : 0
+          Layout.leftMargin: 18
+          Layout.rightMargin: 18
+
+          RowLayout {
+            anchors.fill: parent
+            spacing: 10
+
+            Text {
+              textFormat: Text.PlainText
+              Layout.fillWidth: true
+              text: root.codeNotice !== ""
+                ? root.codeNotice
+                : "Editing: click an item to allow or block it. Allowed: "
+                  + Object.keys(root.allowedIds).length + " applications, "
+                  + Object.keys(root.allowedActionIds).length + " menu entries"
+              color: Color.menu.text
+              font.family: Style.font.menuFamily
+              font.pixelSize: Math.max(10, root.layoutFontSize - 1)
+              font.weight: Font.DemiBold
+              elide: Text.ElideRight
+            }
+
+            Rectangle {
+              Layout.preferredWidth: 150
+              Layout.preferredHeight: 28
+              radius: 14
+              color: Color.menu.selectedBackground
+
+              TextInput {
+                id: newCodeField
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                color: Color.menu.text
+                font.family: Style.font.menuFamily
+                font.pixelSize: Math.max(10, root.layoutFontSize - 1)
+                font.weight: Font.DemiBold
+                verticalAlignment: TextInput.AlignVCenter
+                inputMethodHints: Qt.ImhDigitsOnly
+                maximumLength: 8
+                clip: true
+                onTextChanged: {
+                  var digits = root.normalizedCode(text)
+                  if (digits !== text) text = digits
+                }
+                Keys.onReturnPressed: if (root.savePasscode(newCodeField.text)) newCodeField.text = ""
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.verticalCenter: parent.verticalCenter
+                  visible: !parent.text
+                  text: "New code"
+                  color: Color.muted
+                  font: parent.font
+                }
+              }
+            }
+
+            Rectangle {
+              Layout.preferredWidth: 96
+              Layout.preferredHeight: 28
+              radius: 14
+              color: saveCodeMouse.containsMouse ? Color.accent : Color.menu.selectedBackground
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                text: "Save code"
+                color: saveCodeMouse.containsMouse ? Color.menu.background : Color.menu.text
+                font.family: Style.font.menuFamily
+                font.pixelSize: Math.max(9, root.layoutFontSize - 3)
+                font.weight: Font.DemiBold
+              }
+
+              MouseArea {
+                id: saveCodeMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (root.savePasscode(newCodeField.text)) newCodeField.text = ""
+              }
+            }
+
+            // Only reachable from here, which means behind the code. The allow
+            // lists survive and apply again when the lock is switched back on.
+            Rectangle {
+              Layout.preferredWidth: 110
+              Layout.preferredHeight: 28
+              radius: 14
+              color: disableLockMouse.containsMouse ? "#c0566f" : Color.menu.selectedBackground
+
+              Text {
+                textFormat: Text.PlainText
+                anchors.centerIn: parent
+                text: "Disable lock"
+                color: disableLockMouse.containsMouse ? "#ffffff" : Color.menu.text
+                font.family: Style.font.menuFamily
+                font.pixelSize: Math.max(9, root.layoutFontSize - 3)
+                font.weight: Font.DemiBold
+              }
+
+              MouseArea {
+                id: disableLockMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.setLockEnabled(false)
+              }
+            }
+          }
         }
 
         Item {
@@ -1003,6 +1435,7 @@ Item {
               height: grid.cellHeight
 
               property bool isPinned: app ? root.pinnedIds[app.id] === true : false
+              property bool isAllowed: app ? root.allowedIds[app.id] === true : false
               property bool isRunning: app ? root.isAppRunning(app) : false
 
               Rectangle {
@@ -1063,8 +1496,37 @@ Item {
                 }
               }
 
+              // While editing, the allow marker replaces the pin so a click on
+              // the tile has exactly one meaning.
+              Rectangle {
+                id: allowedBadge
+                visible: root.settingsMode
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 4
+                anchors.rightMargin: 7
+                width: 22
+                height: 22
+                radius: 11
+                color: appItem.isAllowed ? Color.accent : Color.menu.selectedBackground
+                border.color: Color.menu.border
+                border.width: 1
+                z: 4
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: appItem.isAllowed ? "\u2713" : "\u2715"
+                  color: appItem.isAllowed ? Color.menu.background : Color.muted
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Math.max(10, root.layoutFontSize - 2)
+                  font.weight: Font.DemiBold
+                }
+              }
+
               Rectangle {
                 id: pinBadge
+                visible: !root.settingsMode
                 anchors.top: parent.top
                 anchors.right: parent.right
                 anchors.topMargin: 4
@@ -1112,10 +1574,11 @@ Item {
                 text: root.appLibrary
                   ? root.appLibrary.entryName(app)
                   : String(app ? (app.name || app.id) : "?")
-                color: Color.menu.text
+                color: root.settingsMode && !appItem.isAllowed ? Color.muted : Color.menu.text
                 font.family: Style.font.menuFamily
                 font.pixelSize: root.layoutFontSize
                   font.weight: Font.DemiBold
+                font.strikeout: root.settingsMode && !appItem.isAllowed
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
@@ -1159,13 +1622,40 @@ Item {
                 z: 2
               }
 
+              // A blocked entry while editing: a solid veil and a strike. Plain
+              // rectangles do not take mouse events, so the whole tile stays
+              // clickable for toggling.
+              Rectangle {
+                visible: root.settingsMode && !appItem.isAllowed
+                anchors.centerIn: parent
+                width: Math.min(parent.width, parent.height) - 6
+                height: width
+                radius: width / 2
+                color: "#b3141118"
+                z: 5
+              }
+
+              Rectangle {
+                visible: root.settingsMode && !appItem.isAllowed
+                anchors.horizontalCenter: iconBox.horizontalCenter
+                anchors.verticalCenter: iconBox.verticalCenter
+                width: Math.min(parent.width, parent.height) - 18
+                height: 2
+                radius: 1
+                color: "#e2718c"
+                antialiasing: true
+                z: 6
+              }
+
               MouseArea {
                 id: mouse
                 anchors.fill: parent
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: {
-                  if (app) root.launch(app)
+                  if (!app) return
+                  if (root.settingsMode) root.toggleAllowed(app.id)
+                  else root.launch(app)
                 }
               }
 
@@ -1184,6 +1674,41 @@ Item {
                 fontFamily: Style.font.menuFamily
               }
 
+            }
+          }
+
+          // With nothing allowed the grid is empty on purpose; explain the way in.
+          Column {
+            anchors.centerIn: parent
+            width: parent.width - 80
+            spacing: 8
+            visible: root.lockEnabled && !root.settingsMode
+              && root.allowedIdsLoaded && root.filteredApps.length === 0
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: searchField.text.length > 0
+                ? "No allowed application matches your search."
+                : "No application has been allowed yet."
+              color: Color.menu.text
+              font.family: Style.font.menuFamily
+              font.pixelSize: root.layoutFontSize + 2
+              font.weight: Font.DemiBold
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "Click the key in the top right and enter the code to allow applications."
+              color: Color.muted
+              font.family: Style.font.menuFamily
+              font.pixelSize: root.layoutFontSize
+              font.weight: Font.DemiBold
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
             }
           }
 
@@ -1249,7 +1774,8 @@ Item {
             anchors.top: parent.top
             property int columnCount: Math.max(1, Math.floor(width / 140))
             cellWidth: width / columnCount
-            cellHeight: 128
+            // While editing, each tile needs one more line for the entry's path.
+            cellHeight: root.settingsMode ? 150 : 128
             height: Math.floor(parent.height / cellHeight) * cellHeight
             snapMode: GridView.SnapToRow
             model: root.sectionRowIds
@@ -1258,10 +1784,15 @@ Item {
             flickDeceleration: 2800
 
             delegate: Item {
+              id: sectionItem
               required property string modelData
               readonly property var row: root.sectionRowForId(modelData)
               width: sectionGrid.cellWidth
               height: sectionGrid.cellHeight
+              readonly property bool gated: root.settingsMode
+                && !!row && row.id !== "__back__"
+              readonly property bool rowAllowed: !!row
+                && root.allowedActionIds[row.id] === true
 
               Rectangle {
                 anchors.centerIn: parent
@@ -1273,6 +1804,7 @@ Item {
 
               Text {
   textFormat: Text.PlainText
+                id: sectionIcon
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
                 anchors.topMargin: 14
@@ -1300,10 +1832,12 @@ Item {
                   width: Math.min(140, implicitWidth)
                   height: sectionLabelRow.height
                   text: row ? row.label : ""
-                  color: Color.menu.text
+                  color: sectionItem.gated && !sectionItem.rowAllowed
+                    ? Color.muted : Color.menu.text
                   font.family: Style.font.menuFamily
                   font.pixelSize: root.layoutFontSize
                   font.weight: Font.DemiBold
+                  font.strikeout: sectionItem.gated && !sectionItem.rowAllowed
                   horizontalAlignment: Text.AlignHCenter
                   verticalAlignment: Text.AlignVCenter
                   maximumLineCount: 2
@@ -1324,6 +1858,82 @@ Item {
                   horizontalAlignment: Text.AlignHCenter
                   verticalAlignment: Text.AlignVCenter
                 }
+              }
+
+              Rectangle {
+                visible: sectionItem.gated && !sectionItem.rowAllowed
+                anchors.centerIn: parent
+                width: Math.min(parent.width, parent.height) - 6
+                height: width
+                radius: width / 2
+                color: "#b3141118"
+                z: 5
+              }
+
+              Rectangle {
+                visible: sectionItem.gated && !sectionItem.rowAllowed
+                anchors.horizontalCenter: sectionIcon.horizontalCenter
+                anchors.verticalCenter: sectionIcon.verticalCenter
+                width: Math.min(parent.width, parent.height) - 18
+                height: 2
+                radius: 1
+                color: "#e2718c"
+                antialiasing: true
+                z: 6
+              }
+
+              Rectangle {
+                id: sectionBadge
+                visible: sectionItem.gated
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 4
+                anchors.rightMargin: 7
+                width: 22
+                height: 22
+                radius: 11
+                color: sectionItem.rowAllowed ? Color.accent : Color.menu.selectedBackground
+                border.color: Color.menu.border
+                border.width: 1
+                z: 7
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: sectionItem.rowAllowed ? "\u2713" : "\u2715"
+                  color: sectionItem.rowAllowed ? Color.menu.background : Color.muted
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Math.max(10, root.layoutFontSize - 2)
+                  font.weight: Font.DemiBold
+                }
+
+                MouseArea {
+                  anchors.fill: parent
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: if (sectionItem.row) root.toggleAllowedAction(sectionItem.row.id)
+                }
+              }
+
+              // Where the entry lives, so entries sharing a label stay telling apart.
+              Text {
+                textFormat: Text.PlainText
+                visible: root.settingsMode && !!row && !!row.path
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: 6
+                anchors.rightMargin: 6
+                anchors.top: sectionLabelRow.bottom
+                anchors.topMargin: 1
+                height: 14
+                text: row && row.path ? row.path : ""
+                color: Color.muted
+                font.family: Style.font.menuFamily
+                font.pixelSize: Math.max(9, root.layoutFontSize - 4)
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideLeft
+                z: 8
               }
 
               MouseArea {
@@ -1369,7 +1979,7 @@ Item {
             orientation: ListView.Horizontal
             spacing: 0
             clip: true
-            model: root.globalSearchActive ? root.searchNavigationIds : root.navigationIds
+            model: root.globalSearchActive ? root.searchNavigationIds : root.visibleNavigationIds
             interactive: false
 
             delegate: Item {
@@ -1419,6 +2029,151 @@ Item {
                 onClicked: {
                   if (root.globalSearchActive) root.selectSearchCategory(item.id)
                   else root.selectSection(item.id, item.id === "apps")
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // The code guards against accidental changes. It is not a security
+      // feature: it lives in plain text next to the allow lists.
+      Rectangle {
+        id: codeOverlay
+        visible: root.lockMode === "unlock"
+        anchors.fill: parent
+        color: "#cc101010"
+        z: 50
+
+        MouseArea {
+          anchors.fill: parent
+          onClicked: root.cancelPasscode()
+        }
+
+        Rectangle {
+          anchors.centerIn: parent
+          width: 330
+          height: 208
+          radius: 16
+          color: Color.menu.background
+          border.color: Color.accent
+          border.width: 1
+
+          MouseArea { anchors.fill: parent; onClicked: {} }
+
+          Column {
+            anchors.centerIn: parent
+            width: parent.width - 48
+            spacing: 13
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              text: "Enter code"
+              color: Color.menu.text
+              font.family: Style.font.menuFamily
+              font.pixelSize: root.layoutFontSize + 3
+              font.weight: Font.DemiBold
+              horizontalAlignment: Text.AlignHCenter
+            }
+
+            Rectangle {
+              width: parent.width
+              height: 34
+              radius: 17
+              color: Color.menu.selectedBackground
+
+              TextInput {
+                id: codeField
+                anchors.fill: parent
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+                color: Color.menu.text
+                font.family: Style.font.menuFamily
+                font.pixelSize: root.layoutFontSize + 2
+                font.weight: Font.DemiBold
+                horizontalAlignment: TextInput.AlignHCenter
+                verticalAlignment: TextInput.AlignVCenter
+                echoMode: TextInput.Password
+                inputMethodHints: Qt.ImhDigitsOnly
+                maximumLength: 8
+                clip: true
+                onTextChanged: {
+                  var digits = root.normalizedCode(text)
+                  if (digits !== text) text = digits
+                }
+                Keys.onReturnPressed: root.submitPasscode()
+                Keys.onEnterPressed: root.submitPasscode()
+                Keys.onEscapePressed: root.cancelPasscode()
+              }
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              width: parent.width
+              height: 16
+              text: root.codeNotice
+              color: Color.muted
+              font.family: Style.font.menuFamily
+              font.pixelSize: Math.max(10, root.layoutFontSize - 2)
+              font.weight: Font.DemiBold
+              horizontalAlignment: Text.AlignHCenter
+              elide: Text.ElideRight
+            }
+
+            Row {
+              anchors.horizontalCenter: parent.horizontalCenter
+              spacing: 10
+
+              Rectangle {
+                width: 120
+                height: 32
+                radius: 16
+                color: cancelMouse.containsMouse ? Color.menu.selectedBackground : "transparent"
+                border.color: Color.menu.border
+                border.width: 1
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: "Cancel"
+                  color: Color.menu.text
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: root.layoutFontSize
+                  font.weight: Font.DemiBold
+                }
+
+                MouseArea {
+                  id: cancelMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.cancelPasscode()
+                }
+              }
+
+              Rectangle {
+                width: 120
+                height: 32
+                radius: 16
+                color: confirmMouse.containsMouse ? Color.accent : Color.menu.selectedBackground
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: "Unlock"
+                  color: confirmMouse.containsMouse ? Color.menu.background : Color.menu.text
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: root.layoutFontSize
+                  font.weight: Font.DemiBold
+                }
+
+                MouseArea {
+                  id: confirmMouse
+                  anchors.fill: parent
+                  hoverEnabled: true
+                  cursorShape: Qt.PointingHandCursor
+                  onClicked: root.submitPasscode()
                 }
               }
             }
