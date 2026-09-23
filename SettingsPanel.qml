@@ -26,17 +26,34 @@ Item {
 
   readonly property string stateFile: Quickshell.env("HOME")
     + "/.local/state/iamcheyan-launcher/layout.json"
-  readonly property string lockFile: Quickshell.env("HOME")
-    + "/.local/state/iamcheyan-launcher/lock-enabled"
-  property bool lockEnabled: false
+  readonly property string lockConfigDir: Quickshell.env("HOME") + "/.config/omarchy"
+  readonly property string lockFile: root.lockConfigDir + "/iamcheyan-launcher.json"
+  // The parsed config is kept whole so enabling the lock cannot drop the allow
+  // lists or the code that the launcher wrote.
+  property var lockConfig: ({})
+  readonly property bool lockEnabled: root.lockConfig
+    && root.lockConfig.lockEnabled === true
 
   // Switching the lock on is unrestricted because it only ever restricts.
   // Switching it off happens in the launcher, behind the code.
   function enableLock() {
-    root.lockEnabled = true
-    Util.execDetached("mkdir -p "
-      + Util.shellQuote(Quickshell.env("HOME") + "/.local/state/iamcheyan-launcher")
-      + " && printf %s " + Util.shellQuote("1\n")
+    var next = ({
+      version: 1,
+      lockEnabled: true,
+      passcode: "0000",
+      allowedApps: [],
+      allowedMenuEntries: []
+    })
+    var current = root.lockConfig
+    if (current && typeof current === "object") {
+      if (typeof current.passcode === "string") next.passcode = current.passcode
+      if (Array.isArray(current.allowedApps)) next.allowedApps = current.allowedApps
+      if (Array.isArray(current.allowedMenuEntries))
+        next.allowedMenuEntries = current.allowedMenuEntries
+    }
+    root.lockConfig = next
+    Util.execDetached("mkdir -p " + Util.shellQuote(root.lockConfigDir)
+      + " && printf %s " + Util.shellQuote(JSON.stringify(next, null, 2) + "\n")
       + " > " + Util.shellQuote(root.lockFile))
   }
 
@@ -118,8 +135,11 @@ Item {
     path: root.lockFile
     printErrors: false
     watchChanges: true
-    onLoaded: root.lockEnabled = String(text() || "").trim() === "1"
-    onLoadFailed: root.lockEnabled = false
+    onLoaded: {
+      try { root.lockConfig = JSON.parse(text()) || ({}) }
+      catch (error) { root.lockConfig = ({}) }
+    }
+    onLoadFailed: root.lockConfig = ({})
     onFileChanged: reload()
   }
 

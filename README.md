@@ -144,10 +144,26 @@ State written under `~/.local/state/iamcheyan-launcher/`:
 
 - `pinned-apps` — pinned applications.
 - `layout.json` — columns, rows, icon size, and interface font size.
-- `lock-enabled` — `1` while the application lock is on; absent means off.
-- `allowed-apps` — allowed application ids, one per line.
-- `allowed-actions` — allowed menu entry ids, one per line.
-- `passcode` — the lock code, in plain text.
+
+The application lock keeps everything in one file,
+`~/.config/omarchy/iamcheyan-launcher.json`, because the allow lists are a
+deliberate decision rather than incidental state. It is written pretty printed
+with sorted lists and can be edited by hand; the launcher picks changes up
+immediately. Missing file means the lock is off.
+
+```json
+{
+  "version": 1,
+  "lockEnabled": true,
+  "passcode": "0000",
+  "allowedApps": ["chromium", "org.gnome.Nautilus"],
+  "allowedMenuEntries": ["learn.keybindings", "style.theme"]
+}
+```
+
+`allowedApps` holds desktop entry ids, `allowedMenuEntries` holds native menu
+entry ids such as `style.theme`. A malformed file is reported and ignored rather
+than silently unlocking the launcher.
 
 ## Validation
 

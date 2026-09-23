@@ -55,11 +55,11 @@ Item {
   // Optional application lock. It is off unless lock-enabled says otherwise, so
   // an existing installation keeps behaving exactly as before.
   readonly property string defaultPasscode: "0000"
-  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/iamcheyan-launcher"
-  readonly property string allowedAppsFile: root.stateDir + "/allowed-apps"
-  readonly property string allowedActionsFile: root.stateDir + "/allowed-actions"
-  readonly property string lockEnabledFile: root.stateDir + "/lock-enabled"
-  readonly property string passcodeFile_path: root.stateDir + "/passcode"
+  // One config file for the whole feature, under XDG config rather than state,
+  // because the allow lists are a deliberate user decision and are meant to be
+  // edited by hand as well as through the UI.
+  readonly property string lockConfigDir: Quickshell.env("HOME") + "/.config/omarchy"
+  readonly property string lockConfigFile: root.lockConfigDir + "/iamcheyan-launcher.json"
   property bool lockEnabled: false
   property var allowedIds: ({})
   property bool allowedIdsLoaded: false
@@ -100,10 +100,7 @@ Item {
     root.codeNotice = ""
     root.selectSection(String(payload.menu || "apps"), false)
     pinnedFile.reload()
-    lockEnabledFile_view.reload()
-    allowedAppsFile_view.reload()
-    allowedActionsFile_view.reload()
-    passcodeFile.reload()
+    lockConfigFile_view.reload()
     runningAppsLoader.active = true
     if (runningAppsLoader.item) runningAppsLoader.item.refresh()
     root.refreshApps()
@@ -187,16 +184,53 @@ Item {
     return result
   }
 
-  function writeState(file, payload) {
-    Util.execDetached("mkdir -p " + Util.shellQuote(root.stateDir)
-      + " && printf %s " + Util.shellQuote(payload) + " > " + Util.shellQuote(file))
+  function sortedIdsOf(map) {
+    var ids = []
+    for (var id in map) if (map[id]) ids.push(id)
+    ids.sort()
+    return ids
   }
 
-  function saveAllowedIds() {
-    var ids = []
-    for (var id in root.allowedIds) if (root.allowedIds[id]) ids.push(id)
-    ids.sort()
-    root.writeState(root.allowedAppsFile, ids.join("\n") + (ids.length ? "\n" : ""))
+  function idMapOf(list) {
+    var next = ({})
+    if (!Array.isArray(list)) return next
+    for (var i = 0; i < list.length; i++) {
+      var id = String(list[i] || "").trim()
+      if (id) next[id] = true
+    }
+    return next
+  }
+
+  // Pretty printed with sorted lists, because this file is meant to be opened
+  // in an editor and diffed, not just written by the UI.
+  function saveLockConfig() {
+    var payload = JSON.stringify({
+      version: 1,
+      lockEnabled: root.lockEnabled,
+      passcode: root.passcode,
+      allowedApps: root.sortedIdsOf(root.allowedIds),
+      allowedMenuEntries: root.sortedIdsOf(root.allowedActionIds)
+    }, null, 2) + "\n"
+    Util.execDetached("mkdir -p " + Util.shellQuote(root.lockConfigDir)
+      + " && printf %s " + Util.shellQuote(payload)
+      + " > " + Util.shellQuote(root.lockConfigFile))
+  }
+
+  // A malformed file must not silently unlock the launcher, so the previous
+  // values are kept and the problem is reported instead.
+  function applyLockConfig(raw) {
+    var parsed = null
+    try { parsed = JSON.parse(raw) } catch (error) {
+      console.warn("iamcheyan.launcher: cannot parse " + root.lockConfigFile + ":", error)
+      return false
+    }
+    if (!parsed || typeof parsed !== "object") return false
+    root.lockEnabled = parsed.lockEnabled === true
+    var code = root.normalizedCode(parsed.passcode)
+    root.passcode = code.length >= 4 ? code : root.defaultPasscode
+    root.allowedIds = root.idMapOf(parsed.allowedApps)
+    root.allowedActionIds = root.idMapOf(parsed.allowedMenuEntries)
+    return true
   }
 
   function toggleAllowed(id) {
@@ -204,14 +238,7 @@ Item {
     if (next[id]) delete next[id]
     else next[id] = true
     root.allowedIds = next
-    root.saveAllowedIds()
-  }
-
-  function saveAllowedActionIds() {
-    var ids = []
-    for (var id in root.allowedActionIds) if (root.allowedActionIds[id]) ids.push(id)
-    ids.sort()
-    root.writeState(root.allowedActionsFile, ids.join("\n") + (ids.length ? "\n" : ""))
+    root.saveLockConfig()
   }
 
   function toggleAllowedAction(id) {
@@ -221,7 +248,7 @@ Item {
     if (next[key]) delete next[key]
     else next[key] = true
     root.allowedActionIds = next
-    root.saveAllowedActionIds()
+    root.saveLockConfig()
   }
 
   function normalizedCode(value) {
@@ -235,7 +262,7 @@ Item {
       return false
     }
     root.passcode = code
-    root.writeState(root.passcodeFile_path, code + "\n")
+    root.saveLockConfig()
     root.codeNotice = "New code saved."
     return true
   }
@@ -244,7 +271,7 @@ Item {
   // it off happens behind the code, otherwise the lock would be worthless.
   function setLockEnabled(on) {
     root.lockEnabled = on === true
-    root.writeState(root.lockEnabledFile, (on === true ? "1" : "0") + "\n")
+    root.saveLockConfig()
     if (!root.lockEnabled) {
       root.lockMode = "normal"
       root.codeNotice = ""
@@ -816,73 +843,27 @@ Item {
   }
 
   FileView {
-    id: lockEnabledFile_view
-    path: root.lockEnabledFile
+    id: lockConfigFile_view
+    path: root.lockConfigFile
     printErrors: false
     watchChanges: true
-    onLoaded: root.lockEnabled = String(text() || "").trim() === "1"
-    // Without the file the lock stays off, so nothing changes for an existing
+    onLoaded: {
+      root.applyLockConfig(text())
+      root.allowedIdsLoaded = true
+      root.filterApps()
+      root.filterCurrentSection()
+    }
+    // Without the file the lock stays off, so nothing changes for an
     // installation that never opts in.
-    onLoadFailed: root.lockEnabled = false
-    onFileChanged: reload()
-  }
-
-  FileView {
-    id: allowedAppsFile_view
-    path: root.allowedAppsFile
-    printErrors: false
-    watchChanges: true
-    onLoaded: {
-      var next = ({})
-      var lines = text().split("\n")
-      for (var i = 0; i < lines.length; i++) {
-        var id = lines[i].trim()
-        if (id) next[id] = true
-      }
-      root.allowedIdsLoaded = true
-      root.allowedIds = next
-      root.filterApps()
-    }
     onLoadFailed: {
-      root.allowedIdsLoaded = true
+      root.lockEnabled = false
+      root.passcode = root.defaultPasscode
       root.allowedIds = ({})
-      root.filterApps()
-    }
-    onFileChanged: reload()
-  }
-
-  FileView {
-    id: allowedActionsFile_view
-    path: root.allowedActionsFile
-    printErrors: false
-    watchChanges: true
-    onLoaded: {
-      var next = ({})
-      var lines = text().split("\n")
-      for (var i = 0; i < lines.length; i++) {
-        var id = lines[i].trim()
-        if (id) next[id] = true
-      }
-      root.allowedActionIds = next
-      root.filterCurrentSection()
-    }
-    onLoadFailed: {
       root.allowedActionIds = ({})
+      root.allowedIdsLoaded = true
+      root.filterApps()
       root.filterCurrentSection()
     }
-    onFileChanged: reload()
-  }
-
-  FileView {
-    id: passcodeFile
-    path: root.passcodeFile_path
-    printErrors: false
-    watchChanges: true
-    onLoaded: {
-      var code = root.normalizedCode(text())
-      root.passcode = code.length >= 4 ? code : root.defaultPasscode
-    }
-    onLoadFailed: root.passcode = root.defaultPasscode
     onFileChanged: reload()
   }
 
