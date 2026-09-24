@@ -1231,6 +1231,14 @@ Item {
               width: searchGrid.cellWidth
               height: searchGrid.cellHeight
               property bool isApp: row ? row.kind === "app" : false
+              // Search results are toggled too, so they need the same state the
+              // application and category tiles show.
+              readonly property string allowKey: row
+                ? String(isApp ? (row.entry ? row.entry.id : "") : row.id) : ""
+              readonly property bool gated: root.settingsMode && allowKey !== ""
+              readonly property bool rowAllowed: allowKey !== ""
+                && (isApp ? root.allowedIds[allowKey] === true
+                  : root.allowedActionIds[allowKey] === true)
 
               Rectangle {
                 anchors.centerIn: parent
@@ -1307,10 +1315,12 @@ Item {
                 anchors.rightMargin: 5
                 height: Math.max(36, root.layoutFontSize * 2.4)
                 text: row ? row.label : ""
-                color: Color.menu.text
+                color: searchItem.gated && !searchItem.rowAllowed
+                  ? Color.muted : Color.menu.text
                 font.family: Style.font.menuFamily
                 font.pixelSize: root.layoutFontSize
                   font.weight: Font.DemiBold
+                font.strikeout: searchItem.gated && !searchItem.rowAllowed
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
@@ -1335,6 +1345,53 @@ Item {
                 maximumLineCount: 2
                 wrapMode: Text.Wrap
                 elide: Text.ElideRight
+              }
+
+              Rectangle {
+                visible: searchItem.gated && !searchItem.rowAllowed
+                anchors.centerIn: parent
+                width: Math.min(parent.width, parent.height) - 6
+                height: width
+                radius: width / 2
+                color: "#b3141118"
+                z: 5
+              }
+
+              Rectangle {
+                visible: searchItem.gated && !searchItem.rowAllowed
+                anchors.horizontalCenter: searchIconBox.horizontalCenter
+                anchors.verticalCenter: searchIconBox.verticalCenter
+                width: Math.min(parent.width, parent.height) - 18
+                height: 2
+                radius: 1
+                color: "#e2718c"
+                antialiasing: true
+                z: 6
+              }
+
+              Rectangle {
+                visible: searchItem.gated
+                anchors.top: parent.top
+                anchors.right: parent.right
+                anchors.topMargin: 4
+                anchors.rightMargin: 7
+                width: 22
+                height: 22
+                radius: 11
+                color: searchItem.rowAllowed ? Color.accent : Color.menu.selectedBackground
+                border.color: Color.menu.border
+                border.width: 1
+                z: 7
+
+                Text {
+                  textFormat: Text.PlainText
+                  anchors.centerIn: parent
+                  text: searchItem.rowAllowed ? "\u2713" : "\u2715"
+                  color: searchItem.rowAllowed ? Color.menu.background : Color.muted
+                  font.family: Style.font.menuFamily
+                  font.pixelSize: Math.max(10, root.layoutFontSize - 2)
+                  font.weight: Font.DemiBold
+                }
               }
 
               MouseArea {
